@@ -61,25 +61,29 @@ npm start
 | `/api/download`    | `scp`s the finished video back and streams it to the browser   |
 | `src/proxy.ts`     | Auth guard (Next 16 renamed "middleware" → "proxy")            |
 
-## Deploying to Vercel ⚠️
+## Deploying to Vercel
 
-This app's backend uses **SSH/scp** to talk to the Lambda box, with the SSH key
-read from a local file path (`LAMBDA_KEY`). That works great locally, but **will
-not work as-is on Vercel** because:
+The backend talks to the Lambda box with the **`node-ssh`** library (pure JS, no
+`ssh`/`scp` binary needed). Generation is fire-and-forget + polling, so request
+handlers stay short. It works on Vercel as long as you provide the SSH key as an
+env var.
 
-- Serverless functions have no persistent `.pem` file on disk.
-- They have short execution limits (long generations would time out).
-- `ssh`/`scp` binaries aren't available in the serverless runtime.
+**Set these Environment Variables** in the Vercel project (Production + Preview):
 
-To deploy on Vercel you'd need to adapt the backend, e.g.:
+| Variable | Notes |
+| --- | --- |
+| `APP_EMAIL` | login email |
+| `APP_PASSWORD` | login password |
+| `AUTH_SECRET` | long random string |
+| `LAMBDA_HOST` | Lambda instance IP |
+| `LAMBDA_USER` | `ubuntu` |
+| `LAMBDA_PYTHON` | `~/ltxenv/bin/python` |
+| `LAMBDA_KEY_CONTENTS` | full contents of your `.pem` file (with newlines) |
 
-- Use an SSH library (`node-ssh`) and pass the **private key contents** via an
-  env var (`LAMBDA_KEY_CONTENTS`) instead of a file path.
-- Run generation as fire-and-forget + poll (already the pattern here), and keep
-  request handlers short.
-- Or put a small API server on the Lambda box itself and have Vercel just call it.
+> Locally you can use `LAMBDA_KEY` (a file path) instead of `LAMBDA_KEY_CONTENTS`.
+> The code prefers `LAMBDA_KEY_CONTENTS` when set.
 
-Until then, **running locally (`npm run dev`) is the supported path.**
+The Lambda box must be **running** for generation to work.
 
 ## Notes
 

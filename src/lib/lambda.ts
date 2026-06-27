@@ -1,50 +1,48 @@
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
+import { NodeSSH, type Config } from "node-ssh";
 
 const HOST = process.env.LAMBDA_HOST ?? "";
 const USER = process.env.LAMBDA_USER ?? "ubuntu";
-const KEY = process.env.LAMBDA_KEY ?? "";
+const KEY_PATH = process.env.LAMBDA_KEY ?? "";
+const KEY_CONTENTS = process.env.LAMBDA_KEY_CONTENTS ?? "";
 const PY = process.env.LAMBDA_PYTHON ?? "~/ltxenv/bin/python";
+const HOME = `/home/${USER}`;
 
-type RunResult = { code: number; stdout: string; stderr: string };
+/**
+ * Build the SSH connection config. Prefers the key *contents* (works on Vercel
+ * / serverless, set LAMBDA_KEY_CONTENTS) and falls back to a key file path
+ * (handy for local dev, set LAMBDA_KEY).
+ */
+function connConfig(): Config {
+  const base: Config = {
+    host: HOST,
+    username: USER,
+    readyTimeout: 30000,
+    keepaliveInterval: 10000,
+  };
 
-function run(cmd: string, args: string[], timeoutMs = 60000): Promise<RunResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`${cmd} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code: code ?? -1, stdout, stderr });
-    });
-  });
+  if (KEY_CONTENTS.trim()) {
+    // Some dashboards store newlines as the literal characters "\n".
+    const normalized =
+      KEY_CONTENTS.includes("\\n") && !KEY_CONTENTS.includes("\n")
+        ? KEY_CONTENTS.replace(/\\n/g, "\n")
+        : KEY_CONTENTS;
+    return { ...base, privateKey: normalized };
+  }
+  return { ...base, privateKeyPath: KEY_PATH };
 }
 
-function ssh(remoteCmd: string, timeoutMs = 60000): Promise<RunResult> {
-  return run(
-    "ssh",
-    [
-      "-i", KEY,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=30",
-      "-o", "ServerAliveInterval=15",
-      `${USER}@${HOST}`,
-      remoteCmd,
-    ],
-    timeoutMs,
-  );
+/** Open a connection, run `fn`, always dispose. */
+async function withSSH<T>(fn: (ssh: NodeSSH) => Promise<T>): Promise<T> {
+  const ssh = new NodeSSH();
+  await ssh.connect(connConfig());
+  try {
+    return await fn(ssh);
+  } finally {
+    ssh.dispose();
+  }
 }
 
 /** Start a generation job on the Lambda box. Returns a jobId. */
@@ -55,30 +53,36 @@ export async function startGeneration(
 ): Promise<string> {
   const jobId = Date.now().toString();
   const b64 = Buffer.from(prompt, "utf8").toString("base64");
-  // setsid fully detaches the process so the job keeps running after we
-  // disconnect. ssh may not return promptly (the background process can hold
-  // the channel), so we use a short timeout and then verify separately.
-  const remote =
+  // setsid + full redirection detaches the job so it survives our disconnect.
+  const startCmd =
     `cd ~ && echo ${b64} | base64 -d > /tmp/prompt_${jobId}.txt && ` +
     `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True setsid ${PY} ltx_generate.py ` +
     `"$(cat /tmp/prompt_${jobId}.txt)" --out output_${jobId}.mp4 ` +
     `--frames ${frames} --steps ${steps} > gen_${jobId}.log 2>&1 < /dev/null & echo STARTED`;
 
+  // Fire the launch. The detached job can hold the channel open, so we cap the
+  // wait and don't treat a timeout as a failure.
+  const ssh = new NodeSSH();
+  await ssh.connect(connConfig());
   try {
-    await ssh(remote, 12000);
-  } catch {
-    // Expected: the detached job keeps the channel open past our short timeout.
+    await Promise.race([
+      ssh.execCommand(startCmd),
+      new Promise((resolve) => setTimeout(resolve, 10000)),
+    ]);
+  } finally {
+    ssh.dispose();
   }
 
-  // Verify the job actually started by checking its log file appeared.
+  // Verify the job really started by checking its log file appeared.
   await new Promise((r) => setTimeout(r, 2000));
-  const { stdout } = await ssh(
-    `test -f ~/gen_${jobId}.log && echo YES || echo NO`,
-    25000,
-  );
-  if (!stdout.includes("YES")) {
-    throw new Error("Could not start the job on the GPU box");
-  }
+  const ok = await withSSH(async (s) => {
+    const { stdout } = await s.execCommand(
+      `test -f ~/gen_${jobId}.log && echo YES || echo NO`,
+    );
+    return stdout.includes("YES");
+  });
+  if (!ok) throw new Error("Could not start the job on the GPU box");
+
   return jobId;
 }
 
@@ -91,24 +95,23 @@ export type Progress = {
 
 /** Read the remote log for a job and turn it into a progress value. */
 export async function getProgress(jobId: string): Promise<Progress> {
-  const { stdout } = await ssh(
-    `cat ~/gen_${jobId}.log 2>/dev/null || echo __NOLOG__`,
-    30000,
-  );
-  const log = stdout;
+  const log = await withSSH(async (s) => {
+    const { stdout } = await s.execCommand(
+      `cat ~/gen_${jobId}.log 2>/dev/null || echo __NOLOG__`,
+    );
+    return stdout;
+  });
 
-  if (log.includes("__NOLOG__") && log.trim() === "__NOLOG__") {
+  if (log.trim() === "__NOLOG__") {
     return { percent: 1, stage: "Starting…", done: false, error: null };
   }
 
-  // Error detection (ignore harmless warnings).
   const hasError =
     /Traceback \(most recent call last\)|OutOfMemoryError|RuntimeError|ModuleNotFoundError|ValueError/.test(
       log,
     ) && !/DONE! Video saved/.test(log);
   if (hasError) {
-    const lines = log.trim().split("\n");
-    const last = lines.slice(-3).join(" ").slice(0, 240);
+    const last = log.trim().split("\n").slice(-3).join(" ").slice(0, 240);
     return { percent: 0, stage: "Failed", done: false, error: last };
   }
 
@@ -144,26 +147,20 @@ export async function getProgress(jobId: string): Promise<Progress> {
 /** Copy the finished video locally and return the temp path. */
 export async function downloadVideo(jobId: string): Promise<string> {
   const dest = path.join(os.tmpdir(), `ltx_${jobId}.mp4`);
-  const { code, stderr } = await run(
-    "scp",
-    [
-      "-i", KEY,
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ConnectTimeout=30",
-      `${USER}@${HOST}:~/output_${jobId}.mp4`,
-      dest,
-    ],
-    180000,
-  );
-  if (code !== 0) throw new Error(`scp failed: ${stderr}`);
+  await withSSH(async (s) => {
+    await s.getFile(dest, `${HOME}/output_${jobId}.mp4`);
+  });
+  if (!fs.existsSync(dest)) throw new Error("Video file not found on the box");
   return dest;
 }
 
 /** Quick health check of the Lambda box. */
 export async function checkMachine(): Promise<boolean> {
   try {
-    const { stdout } = await ssh("echo ALIVE", 20000);
-    return stdout.includes("ALIVE");
+    return await withSSH(async (s) => {
+      const { stdout } = await s.execCommand("echo ALIVE");
+      return stdout.includes("ALIVE");
+    });
   } catch {
     return false;
   }
