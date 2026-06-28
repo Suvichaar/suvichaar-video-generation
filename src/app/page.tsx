@@ -33,9 +33,9 @@ const DURATION = [
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [prompt, setPrompt] = useState(
-    "A beautiful sunset over the ocean, gentle waves, cinematic, golden hour",
-  );
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
   const [steps, setSteps] = useState(30);
   const [frames, setFrames] = useState(97);
 
@@ -45,6 +45,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -55,6 +56,16 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => stopPolling, [stopPolling]);
+
+  function onPickImage(file: File | undefined) {
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please choose an image file");
+      return;
+    }
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+  }
 
   const poll = useCallback(
     (id: string) => {
@@ -67,9 +78,7 @@ export default function DashboardPage() {
             return;
           }
           const data = await res.json();
-          if (data.error && data.stage !== "Failed") {
-            return; // transient read error, keep polling
-          }
+          if (data.error && data.stage !== "Failed") return;
           setPercent(data.percent ?? 0);
           setStage(data.stage ?? "");
           if (data.stage === "Failed" || data.error) {
@@ -91,30 +100,30 @@ export default function DashboardPage() {
   );
 
   async function handleGenerate() {
-    if (!prompt.trim()) {
-      toast.error("Please enter a prompt");
+    if (!imageFile) {
+      toast.error("Please upload an image first");
       return;
     }
     setPhase("running");
     setPercent(0);
-    setStage("Starting…");
+    setStage("Uploading image…");
     setError(null);
     setJobId(null);
 
     try {
-      const res = await fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, frames, steps }),
-      });
+      const fd = new FormData();
+      fd.append("image", imageFile);
+      fd.append("prompt", prompt);
+      fd.append("frames", String(frames));
+      fd.append("steps", String(steps));
+
+      const res = await fetch("/api/generate", { method: "POST", body: fd });
       if (res.status === 401) {
         router.push("/login");
         return;
       }
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error ?? "Failed to start generation");
-      }
+      if (!res.ok) throw new Error(data.error ?? "Failed to start generation");
       setJobId(data.jobId);
       poll(data.jobId);
     } catch (err) {
@@ -156,7 +165,7 @@ export default function DashboardPage() {
             </div>
             <span className="font-semibold">LTX-2 Studio</span>
             <Badge variant="secondary" className="ml-1">
-              A100 · GPU
+              Image → Video
             </Badge>
           </div>
           <Button variant="ghost" size="sm" onClick={logout}>
@@ -168,22 +177,77 @@ export default function DashboardPage() {
       <div className="mx-auto max-w-3xl px-4 py-8">
         <Card className="border-white/10 bg-card/60 backdrop-blur-xl">
           <CardHeader>
-            <CardTitle>Generate a video</CardTitle>
+            <CardTitle>Animate an image</CardTitle>
             <CardDescription>
-              Describe your scene. LTX-2 will create a video with synchronized
-              audio.
+              Upload a photo and LTX-2 will turn it into a video with
+              synchronized audio.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
+            {/* Image upload */}
             <div className="space-y-2">
-              <Label htmlFor="prompt">Prompt</Label>
+              <Label>Image</Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => onPickImage(e.target.files?.[0])}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  onPickImage(e.dataTransfer.files?.[0]);
+                }}
+                className="flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/20 bg-black/20 p-6 text-center transition hover:border-violet-500/60 disabled:opacity-50"
+              >
+                {imagePreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imagePreview}
+                    alt="preview"
+                    className="max-h-56 rounded-lg border border-white/10"
+                  />
+                ) : (
+                  <>
+                    <div className="text-3xl">🖼️</div>
+                    <div className="text-sm font-medium">
+                      Click to upload an image
+                    </div>
+                    <div className="text-muted-foreground text-xs">
+                      or drag &amp; drop · PNG / JPG · max 15 MB
+                    </div>
+                  </>
+                )}
+              </button>
+              {imagePreview && !busy && (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-muted-foreground text-xs underline underline-offset-4 hover:text-foreground"
+                >
+                  Change image
+                </button>
+              )}
+            </div>
+
+            {/* Optional motion prompt */}
+            <div className="space-y-2">
+              <Label htmlFor="prompt">
+                Motion prompt{" "}
+                <span className="text-muted-foreground">(optional)</span>
+              </Label>
               <Textarea
                 id="prompt"
-                rows={4}
+                rows={2}
                 value={prompt}
                 disabled={busy}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="A serene mountain landscape at sunset, cinematic drone shot…"
+                placeholder="e.g. the camera slowly zooms in, leaves sway in the wind…"
                 className="resize-none"
               />
             </div>
@@ -239,7 +303,12 @@ export default function DashboardPage() {
             </div>
 
             {phase === "idle" && (
-              <Button onClick={handleGenerate} className="w-full" size="lg">
+              <Button
+                onClick={handleGenerate}
+                className="w-full"
+                size="lg"
+                disabled={!imageFile}
+              >
                 Generate video
               </Button>
             )}
@@ -279,7 +348,7 @@ export default function DashboardPage() {
                     Download MP4
                   </a>
                   <Button variant="outline" onClick={reset}>
-                    Generate another
+                    Animate another
                   </Button>
                 </div>
               </div>

@@ -1,8 +1,9 @@
 # LTX-2 Studio
 
 A simple dark-themed web app to generate AI videos with **LTX-2** running on your
-Lambda A100 GPU box. Login → type a prompt → watch a live progress bar → download
-the finished MP4 (with audio).
+Lambda A100 GPU box. Login → **upload an image** → watch a live progress bar →
+download the finished MP4 (with audio). The image is animated into a video
+(image-to-video), with an optional motion prompt.
 
 Built with **Next.js 16**, **shadcn/ui**, and a Node backend that talks to the GPU
 box over SSH.
@@ -29,7 +30,7 @@ LAMBDA_KEY=/Users/kumarmayank/Downloads/LTX.pem   # your SSH key
 LAMBDA_PYTHON=~/ltxenv/bin/python    # python env on the box (already set up)
 ```
 
-> The box must have `ltx_generate.py` in the home directory (already uploaded)
+> The box must have `ltx_img2video.py` in the home directory (see `scripts/`)
 > and the `ltxenv` Python environment with diffusers/LTX-2 installed.
 
 ## 3. Run the app
@@ -54,9 +55,9 @@ npm start
 | Route              | Purpose                                                        |
 | ------------------ | ------------------------------------------------------------- |
 | `/login`           | Single-user login (email + password from `.env.local`)        |
-| `/`                | Dashboard: prompt, duration/quality, progress bar, download   |
+| `/`                | Dashboard: image upload, motion prompt, progress bar, download |
 | `/api/login`       | Validates credentials, sets an httpOnly session cookie         |
-| `/api/generate`    | SSHes into the box and launches a generation job, returns jobId|
+| `/api/generate`    | Uploads the image to the box, launches the job, returns jobId  |
 | `/api/progress`    | Reads the job log on the box, returns `{percent, stage, done}` |
 | `/api/download`    | `scp`s the finished video back and streams it to the browser   |
 | `src/proxy.ts`     | Auth guard (Next 16 renamed "middleware" → "proxy")            |

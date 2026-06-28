@@ -45,26 +45,37 @@ async function withSSH<T>(fn: (ssh: NodeSSH) => Promise<T>): Promise<T> {
   }
 }
 
-/** Start a generation job on the Lambda box. Returns a jobId. */
+/**
+ * Start an image-to-video job on the Lambda box. Uploads the input image,
+ * launches the generation, and returns a jobId.
+ */
 export async function startGeneration(
+  imageBytes: Buffer,
   prompt: string,
   frames = 97,
   steps = 30,
 ): Promise<string> {
   const jobId = Date.now().toString();
+
+  // Stage the image locally, then upload it to the box.
+  const localImg = path.join(os.tmpdir(), `input_${jobId}.png`);
+  fs.writeFileSync(localImg, imageBytes);
+  const remoteImg = `${HOME}/input_${jobId}.png`;
+
   const b64 = Buffer.from(prompt, "utf8").toString("base64");
   // setsid + full redirection detaches the job so it survives our disconnect.
   const startCmd =
     `cd ~ && echo ${b64} | base64 -d > /tmp/prompt_${jobId}.txt && ` +
-    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True setsid ${PY} ltx_generate.py ` +
-    `"$(cat /tmp/prompt_${jobId}.txt)" --out output_${jobId}.mp4 ` +
+    `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True setsid ${PY} ltx_img2video.py ` +
+    `--image ${remoteImg} --prompt "$(cat /tmp/prompt_${jobId}.txt)" --out output_${jobId}.mp4 ` +
     `--frames ${frames} --steps ${steps} > gen_${jobId}.log 2>&1 < /dev/null & echo STARTED`;
 
-  // Fire the launch. The detached job can hold the channel open, so we cap the
-  // wait and don't treat a timeout as a failure.
+  // Upload image, then fire the launch. The detached job can hold the channel
+  // open, so we cap the wait and don't treat a timeout as a failure.
   const ssh = new NodeSSH();
   await ssh.connect(connConfig());
   try {
+    await ssh.putFile(localImg, remoteImg);
     await Promise.race([
       ssh.execCommand(startCmd),
       new Promise((resolve) => setTimeout(resolve, 10000)),
