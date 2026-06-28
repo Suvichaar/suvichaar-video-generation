@@ -31,10 +31,47 @@ const DURATION = [
   { label: "Long", frames: 145, hint: "~6s" },
 ];
 
+function Spinner({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      viewBox="0 0 24 24"
+      fill="none"
+      width="16"
+      height="16"
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="3"
+      />
+      <path
+        className="opacity-90"
+        fill="currentColor"
+        d="M12 2a10 10 0 0 1 10 10h-3a7 7 0 0 0-7-7V2z"
+      />
+    </svg>
+  );
+}
+
+function LoadingDots() {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className="loading-dot" style={{ animationDelay: "0ms" }} />
+      <span className="loading-dot" style={{ animationDelay: "200ms" }} />
+      <span className="loading-dot" style={{ animationDelay: "400ms" }} />
+    </span>
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [steps, setSteps] = useState(30);
   const [frames, setFrames] = useState(97);
@@ -152,15 +189,18 @@ export default function DashboardPage() {
   return (
     <main className="relative min-h-screen overflow-hidden">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute -top-40 left-1/4 h-[40rem] w-[40rem] rounded-full bg-violet-600/15 blur-[130px]" />
-        <div className="absolute bottom-0 right-1/4 h-[30rem] w-[30rem] rounded-full bg-sky-500/10 blur-[130px]" />
+        <div className="animate-float absolute -top-40 left-1/4 h-[40rem] w-[40rem] rounded-full bg-violet-600/15 blur-[130px]" />
+        <div
+          className="animate-float absolute bottom-0 right-1/4 h-[30rem] w-[30rem] rounded-full bg-sky-500/10 blur-[130px]"
+          style={{ animationDelay: "3s" }}
+        />
       </div>
 
       {/* Header */}
-      <header className="border-b border-white/10">
+      <header className="border-b border-white/10 backdrop-blur-sm">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-sky-500 text-sm font-bold text-white">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-sky-500 text-sm font-bold text-white shadow-lg shadow-violet-500/30">
               ▶
             </div>
             <span className="font-semibold">LTX-2 Studio</span>
@@ -175,7 +215,7 @@ export default function DashboardPage() {
       </header>
 
       <div className="mx-auto max-w-3xl px-4 py-8">
-        <Card className="border-white/10 bg-card/60 backdrop-blur-xl">
+        <Card className="border-white/10 bg-card/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
           <CardHeader>
             <CardTitle>Animate an image</CardTitle>
             <CardDescription>
@@ -198,41 +238,57 @@ export default function DashboardPage() {
                 type="button"
                 disabled={busy}
                 onClick={() => fileInputRef.current?.click()}
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  setDragActive(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  setDragActive(false);
+                }}
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => {
                   e.preventDefault();
+                  setDragActive(false);
                   onPickImage(e.dataTransfer.files?.[0]);
                 }}
-                className="flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-white/20 bg-black/20 p-6 text-center transition hover:border-violet-500/60 disabled:opacity-50"
+                className={`group relative flex w-full flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border border-dashed p-6 text-center transition-all duration-200 disabled:opacity-60 ${
+                  dragActive
+                    ? "scale-[1.01] border-violet-400 bg-violet-500/10"
+                    : "border-white/20 bg-black/20 hover:border-violet-500/60 hover:bg-black/30"
+                }`}
               >
                 {imagePreview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={imagePreview}
-                    alt="preview"
-                    className="max-h-56 rounded-lg border border-white/10"
-                  />
+                  <div className="relative">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={imagePreview}
+                      alt="preview"
+                      className="max-h-60 rounded-xl border border-white/10 shadow-lg transition group-hover:opacity-90"
+                    />
+                    {!busy && (
+                      <span className="absolute inset-0 flex items-center justify-center rounded-xl bg-black/0 text-sm font-medium text-white opacity-0 transition group-hover:bg-black/40 group-hover:opacity-100">
+                        Change image
+                      </span>
+                    )}
+                  </div>
                 ) : (
                   <>
-                    <div className="text-3xl">🖼️</div>
+                    <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-violet-500/20 to-sky-500/20 text-2xl ring-1 ring-white/10 transition group-hover:scale-110">
+                      🖼️
+                    </div>
                     <div className="text-sm font-medium">
-                      Click to upload an image
+                      Click to upload{" "}
+                      <span className="text-muted-foreground font-normal">
+                        or drag &amp; drop
+                      </span>
                     </div>
                     <div className="text-muted-foreground text-xs">
-                      or drag &amp; drop · PNG / JPG · max 15 MB
+                      PNG / JPG / WEBP · max 15 MB
                     </div>
                   </>
                 )}
               </button>
-              {imagePreview && !busy && (
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-muted-foreground text-xs underline underline-offset-4 hover:text-foreground"
-                >
-                  Change image
-                </button>
-              )}
             </div>
 
             {/* Optional motion prompt */}
@@ -262,10 +318,10 @@ export default function DashboardPage() {
                       type="button"
                       disabled={busy}
                       onClick={() => setFrames(d.frames)}
-                      className={`rounded-lg border px-2 py-2 text-center text-sm transition ${
+                      className={`rounded-lg border px-2 py-2 text-center text-sm transition-all duration-150 ${
                         frames === d.frames
-                          ? "border-violet-500 bg-violet-500/10"
-                          : "border-white/10 hover:border-white/20"
+                          ? "border-violet-500 bg-violet-500/10 shadow-inner"
+                          : "border-white/10 hover:border-white/20 hover:bg-white/5"
                       } disabled:opacity-50`}
                     >
                       <div className="font-medium">{d.label}</div>
@@ -286,10 +342,10 @@ export default function DashboardPage() {
                       type="button"
                       disabled={busy}
                       onClick={() => setSteps(q.steps)}
-                      className={`rounded-lg border px-2 py-2 text-center text-sm transition ${
+                      className={`rounded-lg border px-2 py-2 text-center text-sm transition-all duration-150 ${
                         steps === q.steps
-                          ? "border-violet-500 bg-violet-500/10"
-                          : "border-white/10 hover:border-white/20"
+                          ? "border-violet-500 bg-violet-500/10 shadow-inner"
+                          : "border-white/10 hover:border-white/20 hover:bg-white/5"
                       } disabled:opacity-50`}
                     >
                       <div className="font-medium">{q.label}</div>
@@ -305,21 +361,35 @@ export default function DashboardPage() {
             {phase === "idle" && (
               <Button
                 onClick={handleGenerate}
-                className="w-full"
+                className="w-full bg-gradient-to-r from-violet-500 to-sky-500 text-white shadow-lg shadow-violet-500/25 transition hover:opacity-90"
                 size="lg"
                 disabled={!imageFile}
               >
-                Generate video
+                ✨ Generate video
               </Button>
             )}
 
             {phase === "running" && (
-              <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+              <div className="animate-fade-up space-y-3 rounded-xl border border-violet-500/30 bg-black/30 p-4 ring-1 ring-violet-500/20">
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">{stage}</span>
+                  <span className="text-muted-foreground flex items-center gap-2">
+                    <Spinner className="text-violet-400" />
+                    {stage}
+                    <LoadingDots />
+                  </span>
                   <span className="font-semibold tabular-nums">{percent}%</span>
                 </div>
-                <Progress value={percent} />
+                <div className="relative">
+                  <Progress value={percent} />
+                  <div
+                    className="animate-shimmer pointer-events-none absolute inset-y-0 left-0 rounded-full"
+                    style={{
+                      width: `${percent}%`,
+                      backgroundImage:
+                        "linear-gradient(90deg, transparent, rgba(255,255,255,0.45), transparent)",
+                    }}
+                  />
+                </div>
                 <p className="text-muted-foreground text-xs">
                   Keep this tab open — generation runs on the GPU and can take a
                   few minutes.
@@ -328,7 +398,7 @@ export default function DashboardPage() {
             )}
 
             {phase === "done" && jobId && (
-              <div className="space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+              <div className="animate-fade-up space-y-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
                 <div className="flex items-center gap-2 text-emerald-400">
                   <span className="text-lg">✓</span>
                   <span className="font-medium">Your video is ready!</span>
@@ -337,13 +407,16 @@ export default function DashboardPage() {
                 <video
                   src={`/api/download?jobId=${jobId}`}
                   controls
-                  className="w-full rounded-lg border border-white/10"
+                  className="w-full rounded-lg border border-white/10 shadow-lg"
                 />
                 <div className="flex gap-2">
                   <a
                     href={`/api/download?jobId=${jobId}&dl=1`}
                     download
-                    className={buttonVariants({ size: "lg", className: "flex-1" })}
+                    className={buttonVariants({
+                      size: "lg",
+                      className: "flex-1",
+                    })}
                   >
                     Download MP4
                   </a>
@@ -355,7 +428,7 @@ export default function DashboardPage() {
             )}
 
             {phase === "error" && (
-              <div className="space-y-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
+              <div className="animate-fade-up space-y-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
                 <div className="flex items-center gap-2 text-red-400">
                   <span className="text-lg">✕</span>
                   <span className="font-medium">Generation failed</span>
